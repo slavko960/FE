@@ -1265,6 +1265,7 @@ do
 		    local Showcase = {
 		        Type = 'Showcase',
 		        Model = nil,
+		        LiveSync = Info.LiveSync or false,
 		    }
 		
 		    if Info.Text then
@@ -1280,7 +1281,7 @@ do
 		        Groupbox:AddBlank(3)
 		    end
 		
-		    local Height = Info.Height or 150
+		    local Height = Info.Height or 180
 		
 		    local Outer = Library:Create('Frame', {
 		        BackgroundColor3 = Color3.new(0, 0, 0),
@@ -1290,9 +1291,7 @@ do
 		        Parent = Container,
 		    })
 		
-		    Library:AddToRegistry(Outer, {
-		        BorderColor3 = 'Black',
-		    })
+		    Library:AddToRegistry(Outer, { BorderColor3 = 'Black' })
 		
 		    local Inner = Library:Create('Frame', {
 		        BackgroundColor3 = Library.BackgroundColor,
@@ -1304,10 +1303,7 @@ do
 		        Parent = Outer,
 		    })
 		
-		    Library:AddToRegistry(Inner, {
-		        BackgroundColor3 = 'BackgroundColor',
-		        BorderColor3 = 'OutlineColor',
-		    })
+		    Library:AddToRegistry(Inner, { BackgroundColor3 = 'BackgroundColor', BorderColor3 = 'OutlineColor' })
 		
 		    local Viewport = Library:Create('ViewportFrame', {
 		        BackgroundTransparency = 1,
@@ -1316,6 +1312,9 @@ do
 		        ZIndex = 7,
 		        Parent = Inner,
 		    })
+		
+		    local WorldModel = Instance.new('WorldModel')
+		    WorldModel.Parent = Viewport
 		
 		    local HintLabel = Library:CreateLabel({
 		        Size = UDim2.new(1, 0, 1, 0),
@@ -1333,7 +1332,8 @@ do
 		    Camera.Parent = Viewport
 		    Viewport.CurrentCamera = Camera
 		
-		    local CurrentModel
+		    local OriginalModel = nil
+		    local CurrentModel = nil
 		    local ModelCFrame = CFrame.new()
 		    local Distance = 10
 		    local MinDistance = Info.MinZoom or 2
@@ -1341,6 +1341,9 @@ do
 		    local Rotation = Vector2.new(45, -20)
 		    local RotateSpeed = Info.RotateSpeed or 0.5
 		    local ZoomSpeed = Info.ZoomSpeed or 0.1
+		
+		    local SourceParts = {}
+		    local CloneParts = {}
 		
 		    local function UpdateCamera()
 		        local pitch = math.clamp(Rotation.Y, -80, 80)
@@ -1353,6 +1356,26 @@ do
 		        Camera.CFrame = ModelCFrame * offset
 		    end
 		
+		    local function ClearParts()
+		        SourceParts = {}
+		        CloneParts = {}
+		    end
+		
+		    local function SetupSyncMap()
+		        ClearParts()
+		        if not OriginalModel or not CurrentModel then return end
+		
+		        for _, part in ipairs(OriginalModel:GetDescendants()) do
+		            if part:IsA('BasePart') then
+		                local clonePart = CurrentModel:FindFirstChild(part.Name, true)
+		                if clonePart and clonePart:IsA('BasePart') then
+		                    table.insert(SourceParts, part)
+		                    table.insert(CloneParts, clonePart)
+		                end
+		            end
+		        end
+		    end
+		
 		    function Showcase:SetModel(Source)
 		        local ModelInstance
 		
@@ -1361,44 +1384,34 @@ do
 		        elseif type(Source) == 'string' then
 		            local success, result = pcall(function()
 		                local obj = game
-		
 		                for part in Source:gmatch('[^%.]+') do
 		                    if part == 'game' then continue end
 		                    obj = obj:FindFirstChild(part)
 		                    if not obj then return nil end
 		                end
-		
 		                return obj
 		            end)
-		
-		            if success then
-		                ModelInstance = result
-		            end
+		            if success then ModelInstance = result end
 		        end
 		
-		        if not ModelInstance then
-		            return false, 'invalid model source'
-		        end
+		        if not ModelInstance then return false, 'invalid model source' end
 		
 		        if CurrentModel then
 		            CurrentModel:Destroy()
 		            CurrentModel = nil
 		        end
 		
-		        -- Включаем Archivable чтобы клонирование не возвращало nil
+		        OriginalModel = ModelInstance
 		        local wasArchivable = ModelInstance.Archivable
 		        ModelInstance.Archivable = true
 		        CurrentModel = ModelInstance:Clone()
 		        ModelInstance.Archivable = wasArchivable
 		
-		        if not CurrentModel then
-		            return false, 'failed to clone model'
-		        end
+		        if not CurrentModel then return false, 'failed to clone model' end
 		
-		        CurrentModel.Parent = Viewport
+		        CurrentModel.Parent = WorldModel
 		
 		        local Center, Size
-		
 		        if CurrentModel:IsA('Model') then
 		            Center, Size = CurrentModel:GetBoundingBox()
 		        elseif CurrentModel:IsA('BasePart') then
@@ -1410,9 +1423,8 @@ do
 		            Distance = math.clamp(math.max(Size.X, Size.Y, Size.Z) * 1.6, MinDistance, MaxDistance)
 		        end
 		
-		        Rotation = Vector2.new(45, -20)
 		        HintLabel.Visible = false
-		
+		        SetupSyncMap()
 		        UpdateCamera()
 		        Showcase.Model = CurrentModel
 		
@@ -1424,64 +1436,74 @@ do
 		            CurrentModel:Destroy()
 		            CurrentModel = nil
 		        end
-		
+		        OriginalModel = nil
+		        ClearParts()
 		        HintLabel.Visible = true
 		        Showcase.Model = nil
 		    end
 		
-		    local Dragging = false
-		    local LastMousePos = Vector2.new()
-		    local ActionName = 'LinoriaShowcase_' .. tostring(Viewport)
-		
-		    local function InputHandler(_, InputState, InputObject)
-		        if InputObject.UserInputType == Enum.UserInputType.MouseWheel then
-		            Distance = math.clamp(Distance - InputObject.Position.Z * (Distance * ZoomSpeed), MinDistance, MaxDistance)
-		            UpdateCamera()
-		            return Enum.ContextActionResult.Sink
-		        elseif InputObject.UserInputType == Enum.UserInputType.MouseMovement then
-		            if Dragging then
-		                local CurrentPos = Vector2.new(InputObject.Position.X, InputObject.Position.Y)
-		                local Delta = CurrentPos - LastMousePos
-		
-		                LastMousePos = CurrentPos
-		                Rotation = Vector2.new(Rotation.X - Delta.X * RotateSpeed, Rotation.Y - Delta.Y * RotateSpeed)
-		
-		                UpdateCamera()
-		            end
-		            return Enum.ContextActionResult.Sink
-		        elseif InputObject.UserInputType == Enum.UserInputType.MouseButton1 then
-		            if InputState == Enum.UserInputState.Begin then
-		                Dragging = true
-		                LastMousePos = Vector2.new(InputObject.Position.X, InputObject.Position.Y)
-		            elseif InputState == Enum.UserInputState.End then
-		                Dragging = false
-		            end
-		            return Enum.ContextActionResult.Sink
-		        end
-		
-		        return Enum.ContextActionResult.Pass
+		    function Showcase:SetLiveSync(State)
+		        Showcase.LiveSync = not not State
 		    end
 		
-		    Viewport.MouseEnter:Connect(function()
-		        ContextActionService:BindActionAtPriority(
-		            ActionName,
-		            InputHandler,
-		            false,
-		            Enum.ContextActionPriority.High.Value + 1,
-		            Enum.UserInputType.MouseWheel,
-		            Enum.UserInputType.MouseMovement,
-		            Enum.UserInputType.MouseButton1
-		        )
-		    end)
+		    -- Управление мышью (Зажатие ЛКМ + Вращение + Колесико)
+		    local IsHovered = false
+		    local Dragging = false
+		    local LastMousePos = Vector2.new()
 		
-		    Viewport.MouseLeave:Connect(function()
-		        ContextActionService:UnbindAction(ActionName)
+		    Library:GiveSignal(Inner.MouseEnter:Connect(function()
+		        IsHovered = true
+		    end))
+		
+		    Library:GiveSignal(Inner.MouseLeave:Connect(function()
+		        IsHovered = false
 		        Dragging = false
-		    end)
+		    end))
+		
+		    Library:GiveSignal(InputService.InputBegan:Connect(function(Input)
+		        if Input.UserInputType == Enum.UserInputType.MouseButton1 and IsHovered then
+		            Dragging = true
+		            LastMousePos = Vector2.new(Input.Position.X, Input.Position.Y)
+		        end
+		    end))
 		
 		    Library:GiveSignal(InputService.InputEnded:Connect(function(Input)
 		        if Input.UserInputType == Enum.UserInputType.MouseButton1 then
 		            Dragging = false
+		        end
+		    end))
+		
+		    Library:GiveSignal(InputService.InputChanged:Connect(function(Input)
+		        if Dragging and Input.UserInputType == Enum.UserInputType.MouseMovement then
+		            local CurrentPos = Vector2.new(Input.Position.X, Input.Position.Y)
+		            local Delta = CurrentPos - LastMousePos
+		            LastMousePos = CurrentPos
+		
+		            Rotation = Vector2.new(Rotation.X - Delta.X * RotateSpeed, Rotation.Y - Delta.Y * RotateSpeed)
+		            UpdateCamera()
+		        elseif IsHovered and Input.UserInputType == Enum.UserInputType.MouseWheel then
+		            Distance = math.clamp(Distance - Input.Position.Z * (Distance * ZoomSpeed), MinDistance, MaxDistance)
+		            UpdateCamera()
+		        end
+		    end))
+		
+		    -- Цикл обновления кадров (Live Sync)
+		    Library:GiveSignal(RunService.RenderStepped:Connect(function()
+		        if Showcase.LiveSync and OriginalModel and OriginalModel.Parent and CurrentModel then
+		            local primary = OriginalModel.PrimaryPart or OriginalModel:FindFirstChild('HumanoidRootPart') or OriginalModel:FindFirstChildWhichIsA('BasePart')
+		            if primary then
+		                ModelCFrame = primary.CFrame
+		            end
+		
+		            for i = 1, #SourceParts do
+		                local src = SourceParts[i]
+		                local cln = CloneParts[i]
+		                if src and cln and src.Parent then
+		                    cln.CFrame = src.CFrame
+		                end
+		            end
+		
+		            UpdateCamera()
 		        end
 		    end))
 		
